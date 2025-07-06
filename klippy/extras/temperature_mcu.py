@@ -138,11 +138,10 @@ class PrinterTemperatureMCU:
     def config_stm32f2(self):
         self.slope = 3.3 / .002500
         self.base_temperature = self.calc_base(25., .76 / 3.3)
-    def config_stm32f4(self, addr1=0x1FFF7A2C, addr2=0x1FFF7A2E):
-        cal_adc_30 = self.read16(addr1) / 4095.
-        cal_adc_110 = self.read16(addr2) / 4095.
-        self.slope = (110. - 30.) / (cal_adc_110 - cal_adc_30)
-        self.base_temperature = self.calc_base(30., cal_adc_30)
+    #def config_stm32f4(self, addr1=0x1FFF7A2C, addr2=0x1FFF7A2E):
+    def config_stm32f4(self, addr1=0x1FFFF7F8, addr2=0x1FFFF7FA):
+        self.slope = 3.3 / -.004400
+        self.base_temperature = self.calc_base(25., 1.4 / 3.3)
     def config_stm32f0x2(self):
         self.config_stm32f4(addr1=0x1FFFF7B8, addr2=0x1FFFF7C2)
     def config_stm32f070(self):

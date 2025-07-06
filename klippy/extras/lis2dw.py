@@ -189,7 +189,7 @@ class LIS2DW:
         self.last_error_count = 0
     def _finish_measurements(self):
         # Halt bulk reading
-        self.set_reg(REG_LIS2DW_FIFO_CTRL, 0x00)
+        # self.set_reg(REG_LIS2DW_FIFO_CTRL, 0x00)
         self.query_lis2dw_cmd.send_wait_ack([self.oid, 0])
         self.ffreader.note_end()
         logging.info("LIS2DW finished '%s' measurements", self.name)

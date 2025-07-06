@@ -4,8 +4,10 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging, math
+from . import hx711
 
-HOMING_START_DELAY = 0.001
+
+HOMING_START_DELAY = 0.01  # 0.001
 ENDSTOP_SAMPLE_TIME = .000015
 ENDSTOP_SAMPLE_COUNT = 4
 
@@ -50,6 +52,8 @@ class HomingMove:
             toolhead = printer.lookup_object('toolhead')
         self.toolhead = toolhead
         self.stepper_positions = []
+        self.sensor = self.printer.lookup_object('hx711')
+
     def get_mcu_endstops(self):
         return [es for es, name in self.endstops]
     def _calc_endstop_rate(self, mcu_endstop, movepos, speed):
@@ -96,6 +100,10 @@ class HomingMove:
                                           triggered=triggered)
             endstop_triggers.append(wait)
         all_endstop_trigger = multi_complete(self.printer, endstop_triggers)
+
+        # hx711 set zero fix-wang
+        self.sensor.zero_set()
+
         self.toolhead.dwell(HOMING_START_DELAY)
         # Issue move
         error = None
@@ -199,27 +207,46 @@ class Homing:
         hi = rails[0].get_homing_info()
         hmove = HomingMove(self.printer, endstops)
         hmove.homing_move(homepos, hi.speed)
+        first_trig_pos = [(sp.trig_pos, sp.endstop_name) for sp in hmove.stepper_positions]
         # Perform second home
         if hi.retract_dist:
-            # Retract
-            startpos = self._fill_coord(forcepos)
-            homepos = self._fill_coord(movepos)
-            axes_d = [hp - sp for hp, sp in zip(homepos, startpos)]
-            move_d = math.sqrt(sum([d*d for d in axes_d[:3]]))
-            retract_r = min(1., hi.retract_dist / move_d)
-            retractpos = [hp - ad * retract_r
-                          for hp, ad in zip(homepos, axes_d)]
-            self.toolhead.move(retractpos, hi.retract_speed)
-            # Home again
-            startpos = [rp - ad * retract_r
-                        for rp, ad in zip(retractpos, axes_d)]
-            self.toolhead.set_position(startpos)
-            hmove = HomingMove(self.printer, endstops)
-            hmove.homing_move(homepos, hi.second_homing_speed)
-            if hmove.check_no_movement() is not None:
-                raise self.printer.command_error(
-                    "Endstop %s still triggered after retract"
-                    % (hmove.check_no_movement(),))
+            is_z = False
+            if endstops[0][1] == 'z':
+                is_z = True
+                second_home_cnt = 0
+            while True:
+                # Retract
+                startpos = self._fill_coord(forcepos)
+                homepos = self._fill_coord(movepos)
+                axes_d = [hp - sp for hp, sp in zip(homepos, startpos)]
+                move_d = math.sqrt(sum([d*d for d in axes_d[:3]]))
+                retract_r = min(1., hi.retract_dist / move_d)
+                retractpos = [hp - ad * retract_r
+                            for hp, ad in zip(homepos, axes_d)]
+                self.toolhead.move(retractpos, hi.retract_speed)
+                # Home again
+                startpos = [rp - ad * retract_r
+                            for rp, ad in zip(retractpos, axes_d)]
+                startpos[2] = 252.
+                self.toolhead.set_position(startpos)
+                hmove = HomingMove(self.printer, endstops)
+                hmove.homing_move(homepos, hi.second_homing_speed)
+                if hmove.check_no_movement() is not None:
+                    raise self.printer.command_error(
+                        "Endstop %s still triggered after retract"
+                        % (hmove.check_no_movement(),))
+                if is_z is True:
+                    second_trig_pos = [(sp.trig_pos, sp.endstop_name) for sp in hmove.stepper_positions]
+                    diff_ok = all(abs(stp[0] - ftp[0]) <= 50 for ftp, stp in zip(first_trig_pos, second_trig_pos) if ftp[1] == stp[1])
+                    first_trig_pos = second_trig_pos
+                    if diff_ok is True:
+                        break
+                    second_home_cnt += 1
+                    if second_home_cnt >= 5:
+                        raise self.printer.command_error(
+                            "Z endstop trigger position calibration failed 5 times in a row. Homing failed. This may be caused by filament getting stuck and pulling the toolhead, or by a dirty nozzle.")
+                else:
+                    break
         # Signal home operation complete
         self.toolhead.flush_step_generation()
         self.trigger_mcu_pos = {sp.stepper_name: sp.trig_pos
@@ -262,17 +289,22 @@ class PrinterHoming:
     def probing_move(self, mcu_probe, pos, speed):
         endstops = [(mcu_probe, "probe")]
         hmove = HomingMove(self.printer, endstops)
-        try:
-            epos = hmove.homing_move(pos, speed, probe_pos=True)
-        except self.printer.command_error:
-            if self.printer.is_shutdown():
-                raise self.printer.command_error(
-                    "Probing failed due to printer shutdown")
-            raise
-        if hmove.check_no_movement() is not None:
-            raise self.printer.command_error(
-                "Probe triggered prior to movement")
-        return epos
+        pretrigger_cnt = 0
+        while True:
+            try:
+                epos = hmove.homing_move(pos, speed, probe_pos=True)
+            except self.printer.command_error:
+                if self.printer.is_shutdown():
+                    raise self.printer.command_error(
+                        "Probing failed due to printer shutdown")
+                raise
+            if hmove.check_no_movement() is not None:
+                pretrigger_cnt += 1
+                if pretrigger_cnt >= 3:
+                    raise self.printer.command_error(
+                        "Probe triggered prior to movement")
+                continue
+            return epos
     def cmd_G28(self, gcmd):
         # Move to origin
         axes = []

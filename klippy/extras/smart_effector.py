@@ -4,7 +4,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import logging
+import logging, time
 from . import probe
 
 # SmartEffector communication protocol implemented here originates from
@@ -55,6 +55,7 @@ class SmartEffectorProbe:
         self.probe_accel = config.getfloat('probe_accel', 0., minval=0.)
         self.recovery_time = config.getfloat('recovery_time', 0.4, minval=0.)
         self.probe_wrapper = probe.ProbeEndstopWrapper(config)
+        self.sensor = self.printer.lookup_object('hx711')
         # Wrappers
         self.get_mcu = self.probe_wrapper.get_mcu
         self.add_stepper = self.probe_wrapper.add_stepper
@@ -107,11 +108,14 @@ class SmartEffectorProbe:
                     "M204 S%.3f" % (self.probe_accel,))
         if self.recovery_time:
             toolhead.dwell(self.recovery_time)
+        self.sensor.start_hx711(1)
+        time.sleep(1.0)
     def probe_finish(self, hmove):
         if self.probe_accel:
             self.gcode.run_script_from_command(
                     "M204 S%.3f" % (self.old_max_accel,))
         self.probe_wrapper.probe_finish(hmove)
+        self.sensor.start_hx711(0)
     def _send_command(self, buf):
         # Each byte is sent to the SmartEffector as
         # [0 0 1 0 b7 b6 b5 b4 !b4 b3 b2 b1 b0 !b0]
